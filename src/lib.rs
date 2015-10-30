@@ -6,6 +6,13 @@ pub enum FzContext {}
 pub enum FzAllocContext {}
 pub enum FzLocksContext {}
 
+impl Drop for FzContext {
+    fn drop(&mut self) {
+        println!("dropping!");
+        unsafe { fz_free_context(self) }
+    }
+}
+
 #[allow(dead_code)]
 #[link(name = "mupdf")]
 #[link(name = "freetype")]
@@ -14,6 +21,7 @@ pub enum FzLocksContext {}
 #[link(name = "jpeg")]
 extern {
     fn fz_new_context_imp(alloc: *const FzAllocContext, locks: *const FzLocksContext, max_store: libc::c_uint, version: *const u8) -> *mut FzContext;
+    fn fz_free_context(ctx: *const FzContext);
 
     fn rust_mupdf_FZ_VERSION() -> *const u8;
 }
