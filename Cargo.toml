@@ -2,6 +2,7 @@
 name = "mupdf"
 version = "0.1.0"
 authors = ["Lucas Stadler <lu@papill0n.org>"]
+build = "build.rs"
 
 [dependencies]
 libc = "0.1.*"
