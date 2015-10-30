@@ -2,10 +2,11 @@
 extern crate libc;
 
 #[derive(Debug)]
-enum FzContext {}
-enum FzAllocContext {}
-enum FzLocksContext {}
+pub enum FzContext {}
+pub enum FzAllocContext {}
+pub enum FzLocksContext {}
 
+#[allow(dead_code)]
 #[link(name = "mupdf")]
 #[link(name = "freetype")]
 #[link(name = "png")]
@@ -24,5 +25,5 @@ fn fz_new_context(alloc: *const FzAllocContext, locks: *const FzLocksContext, ma
 #[test]
 fn it_works() {
     let ctx = fz_new_context(std::ptr::null(), std::ptr::null(), 0);
-    println!("a pointer: {:?}", ctx)
+    println!("ctx: {:?}", ctx)
 }
