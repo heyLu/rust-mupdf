@@ -1,7 +1,10 @@
 extern crate std;
 extern crate libc;
 
-use fitz::{FzContext, FzMatrix, FzRect, FzTransition, FzPage, FzLink};
+use std::collections::HashMap;
+use std::ffi;
+
+use fitz::{FzContext};
 
 #[allow(dead_code)]
 #[link(name = "mupdf")]
@@ -33,6 +36,14 @@ extern {
     fn pdf_is_indirect(ctx: *mut FzContext, obj: *mut PDFObj) -> libc::c_int;
     fn pdf_is_stream(ctx: *mut FzContext, obj: *mut PDFObj) -> libc::c_int;
 
+    fn pdf_to_bool(ctx: *mut FzContext, obj: *mut PDFObj) -> libc::c_int;
+    fn pdf_to_int(ctx: *mut FzContext, obj: *mut PDFObj) -> libc::c_int;
+    fn pdf_to_real(ctx: *mut FzContext, obj: *mut PDFObj) -> libc::c_float;
+    fn pdf_to_name(ctx: *mut FzContext, obj: *mut PDFObj) -> *mut libc::c_char;
+
+    fn pdf_array_len(ctx: *mut FzContext, array: *mut PDFObj) -> libc::c_int;
+    fn pdf_array_get(ctx: *mut FzContext, array: *mut PDFObj, idx: libc::c_int) -> *mut PDFObj;
+
     fn pdf_dict_len(ctx: *mut FzContext, dict: *mut PDFObj) -> libc::c_int;
     fn pdf_dict_get_key(ctx: *mut FzContext, dict: *mut PDFObj, idx: libc::c_int) -> *mut PDFObj;
     fn pdf_dict_get_val(ctx: *mut FzContext, dict: *mut PDFObj, idx: libc::c_int) -> *mut PDFObj;
@@ -42,90 +53,89 @@ pub enum PDFDocument {}
 pub enum PDFPage {}
 pub enum PDFObj {}
 
-struct PDFObject {
-    ctx: *mut FzContext,
-    raw_obj: *mut PDFObj,
-    type_: PDFObjectType,
+#[derive(Debug)]
+#[derive(PartialEq)]
+#[derive(Eq)]
+pub enum PDFObject {
+    Null,
+    Bool(bool),
+    Int(i32),
+    //Real(f32),
+    Name(String),
+    String(String),
+    Array(Vec<PDFObject>),
+    Dict(HashMap<String, PDFObject>),
+
+    Unknown,
 }
 
 impl PDFObject {
     fn new(ctx: *mut FzContext, raw_obj: *mut PDFObj) -> PDFObject {
-        let type_ = if unsafe { pdf_is_null(ctx, raw_obj) } != 0 {
-            PDFObjectType::Null
+        if unsafe { pdf_is_null(ctx, raw_obj) } != 0 {
+            PDFObject::Null
         } else if unsafe { pdf_is_bool(ctx, raw_obj) } != 0 {
-            PDFObjectType::Bool
+            let i = unsafe { pdf_to_bool(ctx, raw_obj) };
+            PDFObject::Bool(i != 0)
         } else if unsafe { pdf_is_int(ctx, raw_obj) } != 0 {
-            PDFObjectType::Int
-        } else if unsafe { pdf_is_real(ctx, raw_obj) } != 0 {
-            PDFObjectType::Real
+            println!("int");
+            let i = unsafe { pdf_to_int(ctx, raw_obj) };
+            PDFObject::Int(i)
         } else if unsafe { pdf_is_name(ctx, raw_obj) } != 0 {
-            PDFObjectType::Name
-        } else if unsafe { pdf_is_string(ctx, raw_obj) } != 0 {
-            PDFObjectType::String
+            let n = unsafe { pdf_to_name(ctx, raw_obj) };
+            // TODO: why does a segfault happen here?
+            let s = unsafe { String::from_utf8(ffi::CString::from_raw(n).to_bytes().to_vec()).unwrap() };
+            PDFObject::Name(s)
         } else if unsafe { pdf_is_array(ctx, raw_obj) } != 0 {
-            PDFObjectType::Array
+            let len = unsafe { pdf_array_len(ctx, raw_obj) } as usize;
+            let mut vec = Vec::with_capacity(len);
+            for i in 0..len {
+                let raw_item = unsafe { pdf_array_get(ctx, raw_obj, i as libc::c_int) };
+                vec.push(PDFObject::new(ctx, raw_item));
+            }
+            PDFObject::Array(vec)
         } else if unsafe { pdf_is_dict(ctx, raw_obj) } != 0 {
-            PDFObjectType::Dict
+            let len = unsafe { pdf_dict_len(ctx, raw_obj) } as usize;
+            let mut dict: HashMap<String, PDFObject> = HashMap::with_capacity(len);
+            for i in 0..len {
+                let raw_key = unsafe { pdf_dict_get_key(ctx, raw_obj, i as libc::c_int) };
+                let key = PDFObject::new(ctx, raw_key);
+                let raw_val = unsafe { pdf_dict_get_val(ctx, raw_obj, i as libc::c_int) };
+                let val = PDFObject::new(ctx, raw_val);
+                dict.insert(key.as_name().unwrap(), val);
+            }
+            PDFObject::Dict(dict)
         } else {
-            PDFObjectType::Unknown
-        };
-
-        PDFObject {
-            ctx: ctx,
-            raw_obj: raw_obj,
-            type_: type_,
+            PDFObject::Unknown
         }
     }
 
-    fn object_type(&self) -> &PDFObjectType {
-        &self.type_
-    }
-
-    fn dict_len(&self) -> Option<i32> {
-        match self.type_ {
-            PDFObjectType::Dict => Some(unsafe { pdf_dict_len(self.ctx, self.raw_obj) } as i32),
+    fn as_bool(&self) -> Option<bool> {
+        match self {
+            &PDFObject::Bool(b) => Some(b),
             _ => None,
         }
     }
 
-    fn dict_kvs(&self) -> Option<Vec<(PDFObject, PDFObject)>> {
-        if self.type_ != PDFObjectType::Dict {
-            return None
+    fn as_int(&self) -> Option<i32> {
+        match self {
+            &PDFObject::Int(i) => Some(i),
+            _ => None,
         }
+    }
 
-        let len = self.dict_len().unwrap() as usize;
-        let mut kvs: Vec<(PDFObject, PDFObject)> = Vec::with_capacity(len);
-        for i in 0..len {
-            let raw_key = unsafe { pdf_dict_get_key(self.ctx, self.raw_obj, i as libc::c_int) };
-            let raw_val = unsafe { pdf_dict_get_val(self.ctx, self.raw_obj, i as libc::c_int) };
-            kvs.push((PDFObject::new(self.ctx, raw_key), PDFObject::new(self.ctx, raw_val)));
+    fn as_name(&self) -> Option<String> {
+        match self {
+            &PDFObject::Name(ref s) => Some(s.clone()),
+            _ => None,
         }
-        Some(kvs)
     }
-}
 
-impl std::fmt::Debug for PDFObject {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{:?}", self.type_)
+    fn as_map(&self) -> Option<&HashMap<String, PDFObject>> {
+        match self {
+            &PDFObject::Dict(ref dict) => Some(dict),
+            _ => None,
+        }
     }
-}
-
-#[derive(Debug)]
-#[derive(PartialEq)]
-pub enum PDFObjectType {
-    Null,
-    Bool,
-    Int,
-    Real,
-    //Number,
-    Name,
-    String,
-    Array,
-    Dict,
-    //Indirect,
-    //Stream,
-
-    Unknown,
 }
 
 #[test]
@@ -138,10 +148,5 @@ fn test_load_page() {
 
     let raw_page_obj = unsafe { pdf_lookup_page_obj(ctx, doc, 0) };
     let page_obj = PDFObject::new(ctx, raw_page_obj);
-    println!("{:?}", page_obj.object_type());
-
-    println!("{:?}", page_obj.dict_len());
-    for kv in page_obj.dict_kvs().unwrap().iter() {
-        println!("{:?} -> {:?}", kv.0, kv.1);
-    }
+    println!("{:?}", page_obj);
 }
