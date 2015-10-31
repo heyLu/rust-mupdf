@@ -18,35 +18,114 @@ extern {
 
     fn pdf_count_pages(ctx: *mut FzContext, doc: *mut PDFDocument) -> libc::c_int;
     fn pdf_load_page(ctx: *mut FzContext, doc: *mut PDFDocument, number: libc::c_int) -> *mut PDFPage;
+
+    fn pdf_lookup_page_obj(ctx: *mut FzContext, doc: *mut PDFDocument, needle: libc::c_int) -> *mut PDFObj;
+
+    fn pdf_is_null(ctx: *mut FzContext, obj: *mut PDFObj) -> libc::c_int;
+    fn pdf_is_bool(ctx: *mut FzContext, obj: *mut PDFObj) -> libc::c_int;
+    fn pdf_is_int(ctx: *mut FzContext, obj: *mut PDFObj) -> libc::c_int;
+    fn pdf_is_real(ctx: *mut FzContext, obj: *mut PDFObj) -> libc::c_int;
+    fn pdf_is_number(ctx: *mut FzContext, obj: *mut PDFObj) -> libc::c_int;
+    fn pdf_is_name(ctx: *mut FzContext, obj: *mut PDFObj) -> libc::c_int;
+    fn pdf_is_string(ctx: *mut FzContext, obj: *mut PDFObj) -> libc::c_int;
+    fn pdf_is_array(ctx: *mut FzContext, obj: *mut PDFObj) -> libc::c_int;
+    fn pdf_is_dict(ctx: *mut FzContext, obj: *mut PDFObj) -> libc::c_int;
+    fn pdf_is_indirect(ctx: *mut FzContext, obj: *mut PDFObj) -> libc::c_int;
+    fn pdf_is_stream(ctx: *mut FzContext, obj: *mut PDFObj) -> libc::c_int;
+
+    fn pdf_dict_len(ctx: *mut FzContext, dict: *mut PDFObj) -> libc::c_int;
+    fn pdf_dict_get_key(ctx: *mut FzContext, dict: *mut PDFObj, idx: libc::c_int) -> *mut PDFObj;
+    fn pdf_dict_get_val(ctx: *mut FzContext, dict: *mut PDFObj, idx: libc::c_int) -> *mut PDFObj;
 }
 
 pub enum PDFDocument {}
-
+pub enum PDFPage {}
 pub enum PDFObj {}
-pub enum PDFAnnot {}
 
-#[repr(C)]
-pub struct PDFPage {
-    super_: FzPage,
-    doc: *mut PDFDocument,
+struct PDFObject {
+    ctx: *mut FzContext,
+    raw_obj: *mut PDFObj,
+    type_: PDFObjectType,
+}
 
-    ctm: FzMatrix,
-    mediabox: FzRect,
-    rotate: libc::c_int,
-    transparency: libc::c_int,
-    resources: *mut PDFObj,
-    contents: *mut PDFObj,
-    links: *mut FzLink,
-    annots: *mut PDFAnnot,
-    annot_tailp: *mut *mut PDFAnnot,
-    changed_annots: *mut PDFAnnot,
-    deleted_annots: *mut PDFAnnot,
-    tmp_annots: *mut PDFAnnot,
-    me: *mut PDFObj,
-    duration: libc::c_float,
-    transition_present: libc::c_int,
-    transition: FzTransition,
-    incomplete: libc::c_int,
+impl PDFObject {
+    fn new(ctx: *mut FzContext, raw_obj: *mut PDFObj) -> PDFObject {
+        let type_ = if unsafe { pdf_is_null(ctx, raw_obj) } != 0 {
+            PDFObjectType::Null
+        } else if unsafe { pdf_is_bool(ctx, raw_obj) } != 0 {
+            PDFObjectType::Bool
+        } else if unsafe { pdf_is_int(ctx, raw_obj) } != 0 {
+            PDFObjectType::Int
+        } else if unsafe { pdf_is_real(ctx, raw_obj) } != 0 {
+            PDFObjectType::Real
+        } else if unsafe { pdf_is_name(ctx, raw_obj) } != 0 {
+            PDFObjectType::Name
+        } else if unsafe { pdf_is_string(ctx, raw_obj) } != 0 {
+            PDFObjectType::String
+        } else if unsafe { pdf_is_array(ctx, raw_obj) } != 0 {
+            PDFObjectType::Array
+        } else if unsafe { pdf_is_dict(ctx, raw_obj) } != 0 {
+            PDFObjectType::Dict
+        } else {
+            PDFObjectType::Unknown
+        };
+
+        PDFObject {
+            ctx: ctx,
+            raw_obj: raw_obj,
+            type_: type_,
+        }
+    }
+
+    fn object_type(&self) -> &PDFObjectType {
+        &self.type_
+    }
+
+    fn dict_len(&self) -> Option<i32> {
+        match self.type_ {
+            PDFObjectType::Dict => Some(unsafe { pdf_dict_len(self.ctx, self.raw_obj) } as i32),
+            _ => None,
+        }
+    }
+
+    fn dict_kvs(&self) -> Option<Vec<(PDFObject, PDFObject)>> {
+        if self.type_ != PDFObjectType::Dict {
+            return None
+        }
+
+        let len = self.dict_len().unwrap() as usize;
+        let mut kvs: Vec<(PDFObject, PDFObject)> = Vec::with_capacity(len);
+        for i in 0..len {
+            let raw_key = unsafe { pdf_dict_get_key(self.ctx, self.raw_obj, i as libc::c_int) };
+            let raw_val = unsafe { pdf_dict_get_val(self.ctx, self.raw_obj, i as libc::c_int) };
+            kvs.push((PDFObject::new(self.ctx, raw_key), PDFObject::new(self.ctx, raw_val)));
+        }
+        Some(kvs)
+    }
+}
+
+impl std::fmt::Debug for PDFObject {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:?}", self.type_)
+    }
+}
+
+#[derive(Debug)]
+#[derive(PartialEq)]
+pub enum PDFObjectType {
+    Null,
+    Bool,
+    Int,
+    Real,
+    //Number,
+    Name,
+    String,
+    Array,
+    Dict,
+    //Indirect,
+    //Stream,
+
+    Unknown,
 }
 
 #[test]
@@ -57,6 +136,12 @@ fn test_load_page() {
     let num_pages = unsafe { pdf_count_pages(ctx, doc) };
     println!("pages: {}", num_pages);
 
-    let page = unsafe { pdf_load_page(ctx, doc, 0) };
-    println!("page rotate: {}", unsafe { (*page).rotate });
+    let raw_page_obj = unsafe { pdf_lookup_page_obj(ctx, doc, 0) };
+    let page_obj = PDFObject::new(ctx, raw_page_obj);
+    println!("{:?}", page_obj.object_type());
+
+    println!("{:?}", page_obj.dict_len());
+    for kv in page_obj.dict_kvs().unwrap().iter() {
+        println!("{:?} -> {:?}", kv.0, kv.1);
+    }
 }
