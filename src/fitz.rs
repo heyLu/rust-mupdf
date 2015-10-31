@@ -16,6 +16,10 @@ pub enum FzDevice {}
 pub enum FzMatrix {}
 pub enum FzCookie {}
 
+pub enum FzRect {}
+pub enum FzTransition {}
+pub enum FzLink {}
+
 #[allow(dead_code)]
 #[link(name = "mupdf")]
 #[link(name = "freetype")]
@@ -68,7 +72,7 @@ extern {
     fn rust_mupdf_FZ_VERSION() -> *const u8;
 }
 
-fn fz_new_context(alloc: *const FzAllocContext, locks: *const FzLocksContext, max_store: libc::c_uint) -> *mut FzContext {
+pub fn fz_new_context(alloc: *const FzAllocContext, locks: *const FzLocksContext, max_store: libc::c_uint) -> *mut FzContext {
     unsafe { fz_new_context_imp(alloc, locks, max_store, rust_mupdf_FZ_VERSION()) }
 }
 
